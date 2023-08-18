@@ -42,13 +42,6 @@ func RegisterUser(db *sql.DB, scanner *bufio.Scanner) {
 		log.Fatal(err)
 	}
 
-	// Insert data ke tabel Users
-	_, err = db.Exec("INSERT INTO Users (username, email, password, created_at) VALUES (?, ?, ?, ?)",
-		username, email, hashedPassword, createdAt)
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	// Ambil user_id yang baru saja di-generate
 	var userID int
 	err = db.QueryRow("SELECT LAST_INSERT_ID()").Scan(&userID)
@@ -57,7 +50,7 @@ func RegisterUser(db *sql.DB, scanner *bufio.Scanner) {
 	}
 
 	// Insert data ke tabel user_profiles dan menghubungkannya dengan user_id
-	_, err = db.Exec("INSERT INTO user_profiles (user_id, full_name) VALUES (?, ?)",
+	_, err = db.Exec("INSERT INTO User_Profiles (user_id, full_name) VALUES (?, ?)",
 		userID, "Default Full Name")
 	if err != nil {
 		log.Fatal(err)
@@ -66,7 +59,7 @@ func RegisterUser(db *sql.DB, scanner *bufio.Scanner) {
 	fmt.Println("User registered successfully!")
 }
 
-func LoginUser(db *sql.DB, scanner *bufio.Scanner) {
+func LoginUser(db *sql.DB, scanner *bufio.Scanner) bool {
 	fmt.Println("Login")
 	fmt.Println("-----")
 
@@ -82,15 +75,18 @@ func LoginUser(db *sql.DB, scanner *bufio.Scanner) {
 	var userID int
 	err := db.QueryRow("SELECT user_id, password FROM Users WHERE username = ?", username).Scan(&userID, &storedPassword)
 	if err != nil {
-		log.Fatal(err)
+		log.Println("Login failed:", err)
+		return false
 	}
 
 	// Memeriksa apakah password cocok dengan hashed password yang disimpan
 	if err := bcrypt.CompareHashAndPassword(storedPassword, []byte(password)); err != nil {
-		log.Fatal("Login failed: Incorrect username or password")
+		log.Println("Login failed:", err)
+		return false
 	}
 
 	fmt.Println("Login successful!")
+	return true
 }
 
 func ListLaptops(db *sql.DB) {
@@ -147,10 +143,21 @@ func BuyLaptop(db *sql.DB, scanner *bufio.Scanner) {
 		log.Fatal(err)
 	}
 
+	fmt.Print("Enter quantity: ")
+	scanner.Scan()
+	quantityStr := scanner.Text()
+	quantity, err := strconv.Atoi(quantityStr)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Calculate subtotal
+	subtotal := laptopPrice * float64(quantity)
+
 	// Insert data ke tabel Orders
 	orderDate := time.Now()
 	_, err = db.Exec("INSERT INTO Orders (user_id, order_date, total_amount) VALUES (?, ?, ?)",
-		userID, orderDate, laptopPrice)
+		userID, orderDate, subtotal)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -162,10 +169,28 @@ func BuyLaptop(db *sql.DB, scanner *bufio.Scanner) {
 		log.Fatal(err)
 	}
 
+	// Mengambil informasi stok laptop dari database
+	var laptopStock int
+	err = db.QueryRow("SELECT stock_quantity FROM Laptops WHERE laptop_id = ?", laptopID).Scan(&laptopStock)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Memastikan stok cukup untuk pembelian
+	if laptopStock < quantity {
+		fmt.Println("Not enough stock available!")
+		return
+	}
+
+	// Mengurangi stok laptop
+	newStock := laptopStock - quantity
+	_, err = db.Exec("UPDATE Laptops SET stock_quantity = ? WHERE laptop_id = ?", newStock, laptopID)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	// Insert data ke tabel order_items
-	quantity := 1 // Jumlah item yang dibeli, bisa disesuaikan
-	subtotal := laptopPrice
-	_, err = db.Exec("INSERT INTO order_items (order_id, laptop_id, quantity, subtotal) VALUES (?, ?, ?, ?)",
+	_, err = db.Exec("INSERT INTO Order_Items (order_id, laptop_id, quantity, subtotal) VALUES (?, ?, ?, ?)",
 		orderID, laptopID, quantity, subtotal)
 	if err != nil {
 		log.Fatal(err)
@@ -206,7 +231,7 @@ func EditUser(db *sql.DB, scanner *bufio.Scanner) {
 		log.Fatal(err)
 	}
 
-	_, err = db.Exec("UPDATE user_profiles SET full_name = ?, address = ?, phone_number = ?, birthdate = ? WHERE user_id = ?",
+	_, err = db.Exec("UPDATE User_Profiles SET full_name = ?, address = ?, phone_number = ?, birthdate = ? WHERE user_id = ?",
 		fullName, address, phoneNumber, birthdate, userID)
 	if err != nil {
 		log.Fatal(err)
@@ -227,6 +252,13 @@ func DeleteUser(db *sql.DB, scanner *bufio.Scanner) {
 		log.Fatal(err)
 	}
 
+	// Hapus data terkait dari tabel user_profiles
+	_, err = db.Exec("DELETE FROM User_Profiles WHERE user_id = ?", userID)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Hapus user dari tabel Users
 	_, err = db.Exec("DELETE FROM Users WHERE user_id = ?", userID)
 	if err != nil {
 		log.Fatal(err)
@@ -236,7 +268,7 @@ func DeleteUser(db *sql.DB, scanner *bufio.Scanner) {
 }
 
 func PrintUserReport(db *sql.DB, scanner *bufio.Scanner) {
-	rows, err := db.Query("SELECT user_id, username, email, created_at FROM users")
+	rows, err := db.Query("SELECT user_id, username, email, created_at FROM Users")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -259,7 +291,7 @@ func PrintUserReport(db *sql.DB, scanner *bufio.Scanner) {
 }
 
 func PrintOrderReport(db *sql.DB, scanner *bufio.Scanner) {
-	rows, err := db.Query("SELECT orders.order_id, users.username, orders.order_date, orders.total_amount FROM orders INNER JOIN users ON orders.user_id = users.user_id")
+	rows, err := db.Query("SELECT Orders.order_id, Users.username, Orders.order_date, Orders.total_amount FROM Orders INNER JOIN Users ON Orders.user_id = Users.user_id")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -283,7 +315,7 @@ func PrintOrderReport(db *sql.DB, scanner *bufio.Scanner) {
 }
 
 func PrintStockLaptopReport(db *sql.DB, scanner *bufio.Scanner) {
-	rows, err := db.Query("SELECT laptop_id, brand, model, stock_quantity FROM laptops")
+	rows, err := db.Query("SELECT laptop_id, brand, model, stock_quantity FROM Laptops")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -305,3 +337,4 @@ func PrintStockLaptopReport(db *sql.DB, scanner *bufio.Scanner) {
 	}
 	fmt.Println("--------------------------------------------------")
 }
+
